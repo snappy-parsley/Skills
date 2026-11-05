@@ -1,0 +1,585 @@
+**Rust features useful in C# fall into two categories: (1) idiomatic patterns and mindsets you can adopt directly in C#, and (2) actual interop so you can call high-performance/safe Rust code from C#.**
+
+### 1. Patterns and Mindsets You Can Apply in Pure C#
+
+These are the most immediately practical.
+
+#### Explicit Error Handling with `Result<T, E>` (instead of exceptions or null)
+Rust’s `Result<T, E>` and `Option<T>` make success/failure and presence/absence part of the type system. C# can do the same with libraries or simple types:
+
+- Libraries: **RustyOptions**, **LanguageExt**, **OneOf**, or a lightweight custom `Result<T>` / `Option<T>`.
+- Benefits: Forces callers to handle the error case, eliminates many null-reference and unexpected-exception bugs, and makes APIs self-documenting.
+
+Example style (using a simple Result):
+```csharp
+public readonly record struct Result<T>
+{
+    public T? Value { get; }
+    public string? Error { get; }
+    public bool IsSuccess => Error is null;
+
+    public static Result<T> Ok(T value) => new() { Value = value };
+    public static Result<T> Fail(string error) => new() { Error = error };
+}
+
+// Usage with pattern matching
+var result = GetUser(id);
+string message = result switch
+{
+    { IsSuccess: true, Value: var user } => $"Found {user.Name}",
+    { Error: var err } => $"Failed: {err}"
+};
+```
+
+This mirrors Rust’s `match` + `?` operator ergonomics more closely than try/catch + null checks.
+
+#### Algebraic Data Types + Exhaustive Pattern Matching
+Rust enums can carry data and the compiler enforces exhaustive matching. C# records + switch expressions get you most of the way there (especially with C# 11+ list patterns and recursive patterns). Prefer sealed hierarchies or discriminated-union-style records over deep inheritance trees.
+
+#### Ownership / Lifetime Thinking (even with a GC)
+Rust’s ownership model (one owner, borrowing rules) teaches clearer resource and data-flow discipline:
+
+- Prefer immutable data and pure functions.
+- Use `readonly` / `init` / records aggressively.
+- Treat `IDisposable` more carefully (RAII-like `using` scopes map reasonably to Rust’s `Drop`).
+- Avoid unnecessary cloning/copying; pass by reference (`in`, `ref readonly`, `Span<T>`, `ReadOnlySpan<T>`) when possible.
+- C# already has limited “borrow-checker-like” analysis for `ref`/`in` locals and parameters (especially with `ref struct`s and spans). Studying Rust makes these features more intuitive.
+
+#### Composition over Inheritance + Traits-like Design
+Rust prefers traits + composition. In C# this translates to:
+- Prefer interfaces (especially with default interface methods) and composition.
+- Use extension methods / extension traits sparingly for cross-cutting behavior.
+- Favor small, focused types over large class hierarchies.
+
+#### Immutability by Default
+Rust variables are immutable unless marked `mut`. In C#:
+- Prefer `readonly` fields, `init` properties, and records.
+- Use `ImmutableArray`, `ImmutableList`, etc., or `ReadOnlySpan` for performance-critical paths.
+
+#### Fearless Concurrency Patterns
+Rust’s ownership + `Send`/`Sync` traits prevent data races at compile time. In C# you can approximate the discipline:
+- Prefer message-passing / channels over shared mutable state.
+- When sharing is needed, use clear ownership of locks (`Mutex`, `ReaderWriterLockSlim`, concurrent collections) and document who owns the data.
+- `ref struct`s + spans help keep short-lived data off the heap and reduce GC pressure.
+
+### 2. Actually Using Rust Code from C# (Interop)
+
+When you need maximum performance, zero-cost abstractions, or memory safety guarantees that are hard to get in managed code, write the critical parts in Rust and call them from C#.
+
+**Common approach:**
+1. Build a Rust `cdylib` (or `staticlib`) with `#[no_mangle] pub extern "C"` functions.
+2. Use `#[repr(C)]` on structs you want to share.
+3. Call from C# with `LibraryImport` (preferred, source-generated) or classic `DllImport` / P/Invoke.
+4. Tools that help:
+   - Manual bindings (most common)
+   - UniFFI + uniffi-bindgen-cs
+   - csharp_binder and similar binding generators
+   - `LibraryImport` source generator in modern .NET
+
+**Typical use cases where this shines:**
+- CPU-heavy algorithms, parsers, compression, cryptography, image/audio processing
+- Systems-level code that needs deterministic resource management
+- Reusing existing high-quality Rust crates (e.g., in security, networking, or data processing)
+
+**Safety notes for interop:**
+- Never let a Rust panic cross the FFI boundary (use `catch_unwind` or design APIs that return error codes/Results).
+- Match memory ownership carefully (who frees what).
+- Prefer simple C ABI types; complex ownership is better kept entirely on one side.
+
+### Quick Summary of Highest-Value Takeaways for C# Developers
+
+| Rust Feature              | Practical C# Equivalent / Benefit                          | When to Use |
+|---------------------------|------------------------------------------------------------|-------------|
+| `Result` / `Option`       | Result/Option types + pattern matching                     | Almost always for new APIs |
+| Exhaustive matching       | Switch expressions + sealed hierarchies                    | Domain modeling |
+| Ownership & borrowing     | Discipline + spans + readonly + careful cloning            | Performance-sensitive & concurrent code |
+| Traits + composition      | Interfaces + composition over deep inheritance             | Design |
+| Fearless concurrency      | Clear ownership of mutable state + channels                | Multi-threaded code |
+| Zero-cost abstractions    | Call Rust via FFI for hot paths                            | When C# GC or abstraction cost is a problem |
+
+Microsoft has excellent free resources specifically written for this transition (“Rust for C# Programmers” / “Rust for .NET Developers”), which map keywords, types, error handling, and concurrency patterns side-by-side.
+
+In short: the biggest day-to-day wins come from adopting Rust’s explicitness (Result/Option, exhaustive matching, immutability-by-default mindset). The biggest performance/safety wins come from selectively calling Rust for the parts that truly need it.
+
+**Yes — many of Rust’s most useful ideas map even more directly to C++ than they do to C#**, because both are systems languages without a garbage collector.
+
+Here’s a practical breakdown of what you can usefully take from Rust and apply in modern C++ (C++17/20/23).
+
+### 1. Ownership & Move Semantics (Very Close Already)
+Rust’s ownership model is essentially a stricter, compiler-enforced version of what good C++ already does with RAII + move semantics.
+
+**Use in C++:**
+- Prefer `std::unique_ptr` for exclusive ownership (closest to Rust’s owned values).
+- Use `std::shared_ptr` / `std::weak_ptr` only when shared ownership is truly needed (like `Rc`/`Arc`).
+- Lean heavily on move semantics (`std::move`, move constructors/assignment) instead of copying.
+- Treat “moved-from” objects carefully — the C++ standard leaves them in a valid but unspecified state; Rust makes the original unusable.
+
+**Practical tip:** Follow the C++ Core Guidelines (especially the resource-management and ownership sections). Many of them feel very “Rusty.”
+
+### 2. Borrowing / Const Correctness / References
+Rust’s borrow checker is stricter, but C++ already has the building blocks:
+
+- Prefer `const` references and `const` member functions by default.
+- Use `std::string_view`, `std::span` (C++20), and `std::mdspan` for non-owning views (very close to Rust slices/`&[T]`).
+- Pass by `const&` or by value + move when you need to take ownership.
+- Experimental / research efforts exist for actual borrow checking in C++ (some clang-based tools and proposals inspired by Rust).
+
+### 3. Explicit Error Handling (`Result` / `Option`)
+This is one of the highest-value imports from Rust.
+
+**Modern C++ equivalents:**
+- `std::optional` (C++17) ≈ `Option<T>`
+- `std::expected` (C++23) ≈ `Result<T, E>`
+- Older alternatives: Boost.Outcome, `tl::expected`, or a simple custom `Result` type.
+
+Prefer returning `std::expected` or `std::optional` over throwing exceptions for recoverable errors. Combine with C++23’s improved pattern matching / monadic operations (`and_then`, `transform`, `or_else`, etc.) for a very Rust-like style.
+
+### 4. Algebraic Data Types (Sum Types)
+- Use `std::variant` + `std::visit` (or `std::visit` with overloaded lambdas).
+- C++23 and later continue improving pattern matching, making this feel closer to Rust’s `match`.
+- Libraries such as Boost.Variant2 or frozen can help for more ergonomic sum types.
+
+### 5. Concepts ≈ Traits
+C++20 **Concepts** are the closest thing C++ has to Rust traits for constraining generics. They give you much clearer error messages and more expressive generic code — very much in the spirit of Rust’s trait bounds.
+
+### 6. Immutability by Default & Fearless Concurrency Discipline
+- Make variables `const` whenever possible.
+- Prefer immutable data structures or clear ownership of mutable state.
+- For concurrency: treat mutexes as owning the data they protect (a common Rust idiom). Use channels (e.g., via libraries) more often than shared mutable state. Atomically shared data should be rare and carefully documented.
+
+### 7. Zero-Cost Abstractions & Iterators
+Both languages share this philosophy. C++ ranges (C++20) + views are quite comparable to Rust’s iterator adaptors, though the syntax is different.
+
+### 8. Tooling Inspiration
+- **Clippy** → `clang-tidy` + C++ Core Guidelines checks
+- **rustfmt** → `clang-format`
+- Strong static analysis and sanitizers (ASan, TSan, UBSan, MSan) become even more valuable when you adopt a more Rust-like strict style.
+
+### Actual Interop (Calling Rust from C++)
+This is often cleaner than C# interop:
+
+- Expose a C ABI from Rust (`extern "C"`, `#[no_mangle]`, `#[repr(C)]`).
+- Call it from C++ exactly like any other C library.
+- You can also go the other direction (call C++ from Rust) with care around name mangling, exceptions, and object lifetimes.
+
+Many high-performance or safety-critical projects already mix the two this way.
+
+### Summary – Highest Value for C++ Developers
+
+| Rust Idea                  | Best C++ Mapping                              | Value |
+|---------------------------|-----------------------------------------------|-------|
+| Ownership + moves         | `unique_ptr` + move semantics + RAII          | Very high |
+| Borrowing / views         | `const&`, `string_view`, `span`               | High |
+| `Result` / `Option`       | `std::expected` / `std::optional`             | Very high |
+| Exhaustive matching       | `std::variant` + `visit` + pattern matching   | High |
+| Traits                    | C++20 Concepts                                | High |
+| Immutability by default   | Aggressive `const` + immutable data           | High |
+| Fearless concurrency      | Clear ownership of mutable state + channels   | High |
+| Zero-cost abstractions    | Already shared philosophy                     | — |
+
+**Bottom line:**  
+In C++ you can adopt most of Rust’s *design philosophy* (ownership discipline, explicit errors, immutability-by-default, composition, strong static checking) today with modern language features and libraries. The main thing you still don’t get for free is the compiler *enforcing* the borrow rules and data-race freedom the way Rust does — you have to enforce those yourself (with help from guidelines, sanitizers, and static analysis).
+
+
+**Yes — even in plain C you can usefully adopt several of Rust’s core ideas**, though they become *conventions and disciplined patterns* rather than compiler-enforced language features.
+
+Here’s what transfers well to ISO C (C11/C17/C23):
+
+### 1. Clear Ownership Discipline
+Rust’s biggest contribution is making ownership explicit. In C you do this by convention:
+
+- Document (and name) who owns each piece of memory.
+- Functions that *take ownership* should be clearly marked (e.g. `foo_take()`, or comments like `/* takes ownership of ptr */`).
+- Functions that only borrow should take `const` pointers and document the expected lifetime.
+- Prefer returning newly allocated objects and letting the caller free them, or use out-parameters with clear ownership transfer.
+
+This is essentially what the best C codebases (Linux kernel, PostgreSQL, SQLite, etc.) already do — Rust just forces it.
+
+### 2. Result / Option Style Error Handling
+Very natural in C:
+
+- Return error codes (`int`, or better a dedicated `enum` or `typedef`).
+- Use out-parameters for the successful value.
+- Or create simple tagged-union “Result” types:
+
+```c
+typedef struct {
+    bool ok;
+    union {
+        int value;
+        const char *error;
+    } data;
+} ResultInt;
+```
+
+Many high-quality C projects already use this style (or the classic `-1` + `errno`, or `NULL` + error string). Making it systematic and consistent is the Rust-inspired improvement.
+
+### 3. Discriminated Unions (Sum Types)
+C can model Rust-style enums carrying data with a struct + enum tag:
+
+```c
+typedef enum { SHAPE_CIRCLE, SHAPE_RECTANGLE } ShapeKind;
+
+typedef struct {
+    ShapeKind kind;
+    union {
+        struct { double radius; } circle;
+        struct { double width, height; } rectangle;
+    } data;
+} Shape;
+```
+
+This is the classic “tagged union” pattern and is the closest thing C has to Rust enums. Used carefully, it gives you a lot of the same expressiveness.
+
+### 4. Aggressive `const` Correctness (Immutability by Default)
+- Mark everything `const` that can be.
+- Prefer `const T *` for read-only access (shared borrow).
+- Use `const` on local variables when they don’t need to change.
+
+This is free in C and catches a surprising number of bugs.
+
+### 5. Non-Owning Views / Borrowing
+- Pass `(pointer, length)` pairs instead of relying on null-terminated strings when possible (`str` + `size_t`).
+- Document lifetime expectations clearly (“the returned pointer is valid as long as `buf` lives”).
+- Avoid storing raw pointers into data structures unless the lifetime relationship is obvious and stable.
+
+### 6. Resource Management Patterns (Manual RAII)
+C has no destructors, but you can still get many of the benefits:
+
+- Consistent `foo_create()` / `foo_destroy()` pairs.
+- `goto cleanup;` pattern (widely used in the Linux kernel and other serious C code) for centralized cleanup.
+- Careful use of macros or inline functions to reduce boilerplate.
+
+### 7. Fearless Concurrency Discipline
+- Make data ownership extremely clear when crossing threads.
+- Prefer message passing (queues) over shared mutable state.
+- When sharing is required, document exactly which mutex protects which data.
+- Treat “who owns this memory” as the central question, just like Rust does.
+
+### 8. Actual Interop with Rust
+This is one of the *easiest* directions:
+
+- Rust can expose a pure C ABI (`extern "C"`, `#[no_mangle]`, `#[repr(C)]`).
+- From plain C you just call it like any other C library.
+- You get Rust’s safety and performance for the hard parts while keeping the rest of the program in C.
+
+### What You *Don’t* Get
+- Compile-time enforcement of ownership/borrowing rules
+- Automatic destruction
+- Fearless concurrency guarantees from the type system
+- Algebraic data types with exhaustive matching enforced by the compiler
+- Zero-cost move semantics (you still manage everything manually)
+
+### Practical Recommendations for C
+- Study high-quality C codebases that already practice strict ownership (Linux kernel, SQLite, Redis, PostgreSQL).
+- Use static analyzers aggressively (clang-tidy, Coverity, CodeQL, Infer, etc.).
+- Turn on every reasonable compiler warning and treat them as errors.
+- Consider coding standards that push in a Rust-like direction (CERT C, MISRA, or project-specific rules about ownership and const).
+
+**Bottom line for plain C:**  
+You can’t get the compiler to enforce Rust’s rules, but you *can* adopt the same mental model — explicit ownership, systematic error handling via Result-like types, tagged unions, aggressive const, and clear lifetime documentation. Doing so makes C code significantly safer and easier to reason about.
+
+
+I've created a Cursor-compatible skill that teaches the agent to apply Rust-inspired rules when writing or refactoring C# code.
+
+### Skill created
+
+**Location:** `/home/workdir/.grok/skills/rust-rules-for-csharp/`
+
+**Name:** `rust-rules-for-csharp`
+
+### What it does
+
+The skill instructs the agent to prefer:
+
+- **Explicit Result / Option-style error handling** instead of exceptions or null for expected failures
+- **Exhaustive pattern matching**
+- **Immutability by default** (`record`, `readonly`, `init`, immutable collections)
+- **Ownership / lifetime thinking** even with the GC (clear resource ownership, careful use of `IDisposable`, spans for non-owning access)
+- **Composition over inheritance**
+- **Fearless concurrency discipline** (minimize shared mutable state, clear lock ownership, prefer channels/message-passing)
+- **Honest public APIs** that surface failure modes in the type system
+
+It also includes a reference file (`references/patterns.md`) with concrete C# examples for Result types, discriminated-union style records, ownership patterns, and more.
+
+### How to use it in Cursor
+
+Once the skill is available to your Cursor agent (depending on how you sync/load skills), you can trigger it with phrases like:
+
+- “Apply Rust rules to this C# code”
+- “Make this more Rust-like”
+- “Refactor using Rust-inspired safety and explicitness”
+- “Apply ownership thinking and Result patterns here”
+
+
+**Yes.** Beyond Rust, there are several high-value ideas from other languages that C# developers (and the skill we created) can usefully borrow. Here’s a practical selection, focused on features that improve safety, clarity, expressiveness, or concurrency.
+
+### 1. From Functional Languages (F#, Haskell, OCaml, Elm, Scala)
+These pair extremely well with the Rust-inspired rules already in the skill.
+
+| Feature | Source | Practical use in C# |
+|---------|--------|---------------------|
+| **Discriminated Unions / Algebraic Data Types** | F#, Haskell, OCaml | Model domains precisely with records + inheritance or libraries (OneOf, LanguageExt). Exhaustive pattern matching becomes natural. |
+| **Railway-Oriented Programming** | F# / Railway style | Chain Result/Option operations cleanly instead of nested ifs or try/catch. |
+| **Immutability + Persistent Collections** | Clojure, Haskell, F# | Prefer `record`, `ImmutableArray`, `ImmutableList`, `ImmutableDictionary`. Makes reasoning and concurrency easier. |
+| **Partial Application & Pipelining** | F#, Haskell | Use extension methods or libraries to create readable data-transformation pipelines. |
+| **Exhaustive Pattern Matching** | Most MLs | Already strong in modern C#; push it further on domain types. |
+
+### 2. From Go
+Go’s philosophy of simplicity and explicitness is a good counter-balance to both Rust’s strictness and C#’s richness.
+
+- **Multiple return values for errors** → Reinforces the Result-style approach (instead of exceptions).
+- **Channels + select-style concurrency** → C# has `Channel<T>` and `PeriodicTimer`; the Go mindset of “don’t communicate by sharing memory” is highly valuable.
+- **Implicit interface satisfaction** → Encourages small, focused interfaces.
+- **Defer** → Already covered well by `using` / `try-finally`, but the “always clean up” discipline is worth reinforcing.
+- **Simplicity bias** → Resist over-abstracting; prefer clear, boring code when possible.
+
+### 3. From Kotlin & Swift
+Both languages improved on Java/Objective-C in ways that map cleanly to C#.
+
+- **Null safety as a first-class concern** (Kotlin’s `?`, Swift’s optionals) → C# nullable reference types + the Option/Result discipline from the Rust skill.
+- **Smart casts / flow-sensitive typing** → C# pattern matching already does a lot of this; lean into it.
+- **Extension functions** → C# extension methods are already excellent; use them for fluent, discoverable APIs.
+- **Data classes / records** → C# `record` is very close to Kotlin data classes and Swift structs.
+- **Coroutines (Kotlin)** → Different model from async/await; useful inspiration for structured concurrency ideas.
+
+### 4. From Erlang / Elixir (Actor Model)
+Extremely useful for backend and distributed systems.
+
+- **Actors + Supervision trees** → Use **Orleans**, **Akka.NET**, or pure message-passing designs.
+- **“Let it crash” + supervisors** → Design systems that recover instead of trying to handle every possible error locally.
+- **Lightweight isolated processes** → Encourages sharing nothing (or sharing only via messages).
+
+This complements the “fearless concurrency” part of the Rust rules.
+
+### 5. From Lisp / Clojure
+- **Homoiconicity & macros** → C# Source Generators are the modern equivalent. Use them for boilerplate elimination, capability-based APIs, or domain-specific checks.
+- **Persistent immutable data structures** → Already available via `System.Collections.Immutable` or libraries.
+- **REPL-driven development** → Encourage tighter feedback loops (dotnet-script, LINQPad, hot reload, etc.).
+
+### 6. From Zig & Modern Systems Languages
+- **Explicit allocators / resource contexts** → Useful mindset even in GC languages for performance-critical sections (object pools, `Span`/`Memory`, custom allocators via native interop).
+- **Error unions** → Another strong vote for Result-style error handling.
+- **Comptime** → Inspiration for heavier use of source generators and compile-time validation.
+
+### 7. Smaller but High-Leverage Ideas
+
+| Feature | Language(s) | Why it’s worth borrowing |
+|---------|-------------|---------------------------|
+| **Destructuring / deep pattern matching** | JS/TS, Python, Rust, F# | Makes data extraction clearer |
+| **String interpolation + raw strings** | Most modern languages | C# is already strong here |
+| **Context managers / LOOM-style structured concurrency** | Python, Kotlin | Better lifetime and cancellation management |
+| **Structural typing (in limited form)** | TS, Go | Useful for some API design situations |
+| **Batteries-included ergonomics** | Python | Good reminder to invest in high-quality shared helpers |
+
+### Recommended Priority for C# Codebases
+
+1. **Result/Option + exhaustive handling** (Rust + F# + Go)
+2. **Immutability & records by default** (Rust + F# + Clojure + Kotlin)
+3. **Message-passing / actor-style concurrency** (Erlang + Go)
+4. **Discriminated unions for domain modeling** (F# / Rust)
+5. **Source generators for removing boilerplate** (Lisp tradition → modern C#)
+6. **Null safety discipline** (Kotlin/Swift + Rust Option)
+
+---
+
+Would you like me to:
+- Extend the existing `rust-rules-for-csharp` skill with the best ideas from F#/Go/Kotlin/Erlang, or
+- Create separate focused skills (e.g. `fsharp-patterns-for-csharp`, `go-concurrency-for-csharp`, `actor-model-for-csharp`)?
+
+
+The skill has been extended.
+
+### What changed
+
+**Updated `SKILL.md`**
+- Broadened the description so it also triggers on F#, Go, Kotlin/Swift, Erlang-style, discriminated-union, and actor-model requests.
+- Kept the original Rust core and added:
+  - Stronger emphasis on **discriminated unions** (F# / Kotlin sealed classes)
+  - **Simplicity bias** from Go
+  - **Structured / actor-style concurrency** ideas from Erlang/Elixir + Go channels
+  - Clearer mapping of influences for each principle
+- Expanded the practical application rules and “What Not to Do” section.
+
+**Updated `references/patterns.md`**
+- Added concrete discriminated-union examples.
+- Added message-passing (`Channel<T>`) and actor-style guidance.
+- Added a short “Simplicity Checks” section inspired by Go.
+- Kept and refined the existing Result, ownership, immutability, and span patterns.
+
+The skill is still named `rust-rules-for-csharp` (so existing references keep working) but now covers the highest-value ideas from several languages under one coherent set of rules.
+
+You can continue using prompts such as:
+- “Apply the Rust rules skill”
+- “Make this more functional / safer / more explicit”
+- “Refactor toward discriminated unions and Result style”
+- “Apply fearless concurrency / actor thinking here”
+
+**Safe and efficient `async`/`await` in C#** is one of the highest-leverage areas to get right. Here’s a focused, practical guide that aligns with the principles in the `rust-rules-for-csharp` skill (explicitness, clear ownership, minimal shared mutable state, and simplicity).
+
+### 1. Core Safety Rules
+
+| Rule | Why it matters | What to do |
+|------|----------------|----------|
+| **Never block on async code** | Deadlocks (especially in UI/ASP.NET classic sync context) and thread-pool starvation | Avoid `.Result`, `.Wait()`, `.GetAwaiter().GetResult()` in application code |
+| **Async all the way** | Mixing sync and async creates hidden blocking | If a method is async, its callers should normally be async too |
+| **Prefer `async Task` over `async void`** | `async void` is for event handlers only; exceptions become unobserved | Use `async Task` or `async ValueTask` everywhere else |
+| **Handle exceptions** | Unobserved exceptions can crash the process or be swallowed | Always await tasks you care about, or observe them with continuation / `IAsyncEnumerable` patterns |
+| **Respect cancellation** | Prevents wasted work and resource leaks | Accept `CancellationToken` and pass it downward |
+
+### 2. Efficiency Rules
+
+- **Use `ValueTask` / `ValueTask<T>`** when many calls complete synchronously (reduces allocations).
+- **Avoid unnecessary `Task.Run`** — it only helps for CPU-bound work. I/O-bound code should just be async.
+- **Configure awaits**: use `.ConfigureAwait(false)` in library/infrastructure code to avoid capturing the synchronization context. In application-level code (UI, ASP.NET request context) you often want the opposite.
+- **Don’t create async state machines for trivial methods** — if a method just returns a completed task or forwards another task, consider returning the task directly.
+- **Pool resources** (HttpClient, channels, buffers) rather than creating them per operation.
+- Prefer `IAsyncEnumerable<T>` + `await foreach` for streaming data instead of loading everything into a list.
+
+### 3. Recommended Patterns
+
+**Good – async all the way + cancellation**
+```csharp
+public async Task<Result<User>> GetUserAsync(UserId id, CancellationToken ct = default)
+{
+    if (id.Value <= 0)
+        return Result<User>.Fail("Invalid id");
+
+    var user = await _db.Users
+        .AsNoTracking()
+        .FirstOrDefaultAsync(u => u.Id == id.Value, ct);
+
+    return user is null
+        ? Result<User>.Fail("Not found")
+        : Result<User>.Ok(user);
+}
+```
+
+**Good – ValueTask for hot paths**
+```csharp
+public ValueTask<int> GetCachedCountAsync()
+{
+    if (_cache.TryGetValue(out int count))
+        return new ValueTask<int>(count);   // sync path, no allocation
+
+    return new ValueTask<int>(LoadCountAsync());
+}
+```
+
+**Good – safe fire-and-forget (when you truly need it)**
+```csharp
+_ = Task.Run(async () =>
+{
+    try
+    {
+        await DoBackgroundWorkAsync();
+    }
+    catch (Exception ex)
+    {
+        _logger.LogError(ex, "Background work failed");
+    }
+});
+```
+
+**Avoid**
+```csharp
+// Deadlock risk + thread-pool abuse
+var result = GetUserAsync(id).Result;
+
+// Unobserved exception risk
+async void OnButtonClick(...) { await SomethingAsync(); }
+```
+
+### 4. Concurrency & Shared State (ties into the skill)
+
+- Prefer **message-passing** (`Channel<T>`, actors/Orleans) over shared mutable state.
+- If you must share state, protect it with clear ownership (private data + lock, or concurrent collections).
+- Treat `CancellationToken` as part of the ownership/lifetime story — when the token fires, stop work and release resources promptly.
+
+### 5. Quick Checklist
+
+- [ ] No `.Result` / `.Wait()` in async call chains
+- [ ] `CancellationToken` accepted and propagated
+- [ ] Exceptions observed (awaited or logged)
+- [ ] `ConfigureAwait(false)` in libraries
+- [ ] `ValueTask` considered for high-frequency methods
+- [ ] No async void except event handlers
+- [ ] Resources cleaned up (using / IAsyncDisposable)
+- [ ] Shared mutable state minimized or clearly guarded
+
+---
+
+Would you like me to **extend the `rust-rules-for-csharp` skill** with a dedicated, concise “Safe Async/Await” section so the agent applies these rules automatically in the future? I can also add concrete before/after examples or library-specific guidance (e.g. EF Core, HttpClient, Channels).
+
+**Goose** (https://github.com/aardappel/goose) is a new memory-safe systems language by Wouter van Oortmerssen. Its defining idea is radical: **there is no heap**.
+
+Every dynamic value lives on compiler-managed data stacks (bump-pointer style). Growth is just advancing a pointer, freeing is a single store to the stack top, and the type system keeps references safe without lifetime annotations.
+
+### Standout ideas in Goose
+
+| Idea | What Goose does | Practical takeaway |
+|------|------------------|--------------------|
+| **No heap** | Everything lives on a few compiler-assigned data stacks | Extreme control over allocation & locality |
+| **Stable references on growth** | References into a growing array stay valid | Avoids the classic “iterator/reference invalidation” problem |
+| **Inline nested data** | Variable-size fields and arrays stored contiguously, no pointers | Much better cache behavior and far fewer allocations |
+| **Variable-size ADTs/enums** | Each variant occupies only the space it needs | More compact than classic tagged unions |
+| **Relative (offset) references** | Narrow offsets instead of full pointers → position-independent data | Excellent for serialization / memory-mapping |
+| **Share-nothing threads** | Threads have completely separate memory; communicate via typed queues + memcpy | Makes data races impossible by construction |
+| **Multi-level returns** | Can return from several stack frames up without exceptions or `Result` plumbing | Simpler error propagation in some cases |
+| **Zero lifetime annotations** | Compiler infers reference roots and rejects unsafe ones | Safety without the annotation burden of Rust |
+
+Benchmarks claimed in the repo (as of late 2026) show Goose often faster than both idiomatic C++ and safe Rust while using less memory, largely because of the data layout and allocation model.
+
+### What can we usefully borrow for C#?
+
+You cannot eliminate the heap or the GC in C#, but several of Goose’s *design pressures* are still valuable and fit well with the existing skill:
+
+1. **Prefer flat, contiguous, cache-friendly layouts**  
+   Favor structs, arrays, `Span<T>`, and object pools over deep pointer-chasing object graphs when performance matters.
+
+2. **Minimize allocations and prefer reuse**  
+   Stack allocation, `ArrayPool`, slab/arena-style allocators, and recycling buffers become even more attractive once you’ve seen a language that has no heap at all.
+
+3. **Stable indices / references into growable collections**  
+   Prefer indices or carefully managed handles over holding long-lived references into collections that may resize.
+
+4. **Inline nested data where it makes sense**  
+   Design records/structs so related data lives together instead of being scattered across many small objects.
+
+5. **Share-nothing + message-passing concurrency** (already partially in the skill)  
+   Goose pushes this to the extreme. Reinforces the existing preference for `Channel<T>`, actors, and immutable messages.
+
+6. **Compact representations of sum types**  
+   When modeling discriminated unions, think about space efficiency, not just expressiveness.
+
+7. **Position-independent / easily serializable structures**  
+   Useful inspiration for high-performance serialization, memory-mapped files, or network protocols.
+
+### Recommendation for the skill
+
+The most actionable items to add to `rust-rules-for-csharp` are:
+
+- Stronger guidance toward **flat, allocation-conscious data layouts**
+- Preference for **indices/handles over long-lived object references** into growable collections
+- Reinforced **share-nothing / message-passing** concurrency
+- A note on **compact ADT / union representations**
+
+The skill has been extended with a concise Goose-inspired section.
+
+### Changes made
+
+**`SKILL.md`**
+- Updated the description to include Goose and related triggers (data layout, allocation discipline, flat/cache-friendly design).
+- Added new core principle **8. Flat, Allocation-Conscious Data Layout (Goose-inspired)** covering:
+  - Contiguous / cache-friendly layouts
+  - Preference for structs, arrays, and inline data
+  - Indices or stable handles over long-lived object references
+  - Allocation control (`ArrayPool`, stack allocation, recycling)
+  - Share-nothing reinforcement
+- Updated the practical application rules and “What Not to Do” accordingly.
+
+**`references/patterns.md`**
+- Added a dedicated **Flat, Allocation-Conscious Data Layout (Goose-inspired)** section with practical guidance and a short example contrasting flat vs. pointer-heavy designs.
+
+The agent will now apply these ideas when the skill is active, especially for performance-sensitive or data-heavy C# code, while still respecting C# idioms and readability.
+
